@@ -5,118 +5,105 @@ import io
 import time
 import json
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Extractor IA Gemini - Blindado", page_icon="🤖", layout="wide")
+# --- CONFIGURACIÓN DE SEGURIDAD Y API ---
+# Tu llave ya queda incrustada aquí
+MY_API_KEY = "AIzaSyB74qmjYXqtEIr1pTdNOBwRHpDrpc_mqHU"
 
-st.title("🤖 Extractor Triple A - Inteligencia Artificial (Versión Tanque)")
-st.markdown("""
-Este sistema usa **Google Gemini** para leer tus facturas. 
-Incluye sistema de **auto-reparación**: si un modelo falla, intenta con otro automáticamente.
-""")
+st.set_page_config(page_title="Extractor IA Triple A - Pro", page_icon="🤖", layout="wide")
 
-# --- BARRA LATERAL ---
-with st.sidebar:
-    st.header("🔑 Llave de Acceso")
-    api_key = st.text_input("Pega tu Google API Key aquí", type="password")
-    st.info("Obtenla gratis en Google AI Studio.")
+st.title("🤖 Extractor Triple A - Inteligencia Artificial")
+st.markdown("Sube tus archivos y la IA se encarga de todo. API Key configurada internamente.")
 
-# --- FUNCIÓN ROBUSTA DE LLAMADA A LA IA ---
-def llamar_gemini_seguro(model_name, prompt, file_bytes):
-    """Intenta llamar a un modelo específico."""
-    model = genai.GenerativeModel(model_name)
-    response = model.generate_content([
-        {'mime_type': 'application/pdf', 'data': file_bytes},
-        prompt
-    ])
-    return response.text
-
-def analizar_con_gemini(file_bytes, filename, api_key):
-    # Configurar
-    genai.configure(api_key=api_key)
+# --- FUNCIÓN DE EXTRACCIÓN ---
+def analizar_factura_ia(file_bytes, filename):
+    genai.configure(api_key=MY_API_KEY)
     
-    # PROMPT (Instrucciones)
-    prompt = """
-    Eres un experto contable. Analiza esta factura de Triple A (Barranquilla) y extrae datos en JSON.
+    # Instrucciones precisas para la IA
+    prompt = f"""
+    Actúa como un experto contable. Analiza esta factura de Triple A Barranquilla y extrae los datos exactos.
+    IMPORTANTE: Si el dato está en una tabla, léelo de la fila correspondiente.
     
-    CAMPOS OBLIGATORIOS:
+    CAMPOS OBLIGATORIOS PARA EL JSON:
     - ARCHIVO: "{filename}"
-    - NUMERO_FACTURA: El número principal de la factura.
-    - FECHA_PERIODO: Mes y año facturado (ej: Abril 2023).
-    - FECHA_VENCIMIENTO: Fecha límite de pago.
-    - NOMBRE: Nombre del suscriptor.
-    - VALOR_FACTURA: Valor del consumo del mes (Servicios del periodo).
-    - VALOR_TOTAL_DEUDA: Total a Pagar (Deuda total).
-    - ALUMBRADO: Impuesto de alumbrado público.
-    - INTERESES: Intereses de mora.
-    - POLIZA: Número de póliza.
-    - MODELO: Identifica si es "LEGACY" (vieja), "TRANSICION" (2023) o "ELECTRONICA".
+    - FECHA_PERIODO: El "Período facturado" (ej: Abril 2023).
+    - FECHA_VENCIMIENTO: La fecha "Pague hasta" (ej: Abr 05-23).
+    - NUMERO_FACTURA: El número de la factura (No. de factura o Factura No.).
+    - NOMBRE: Nombre completo del cliente/suscriptor.
+    - VALOR_FACTURA: Consumo del mes (TOTAL FACTURA SERVICIOS DEL PERIODO).
+    - VALOR_TOTAL_DEUDA: Gran total a pagar (TOTAL FACTURA A PAGAR).
+    - ALUMBRADO: Valor del Alumbrado Público.
+    - INTERESES: Valor de Intereses de Mora.
+    - POLIZA: Número de Póliza.
+    - MODELO: Detecta si es LEGACY, TRANSICION o ELECTRONICA.
 
     REGLAS:
-    - Devuelve SOLO el JSON válido. Sin markdown (```json).
-    - Si un valor es 0 o no existe, pon 0.
-    """.format(filename=filename)
+    - Responde ÚNICAMENTE con el objeto JSON.
+    - No uses markdown ni bloques de código.
+    - Si un valor monetario no existe, pon 0.
+    """
 
-    try:
-        # INTENTO 1: Usar GEMINI 1.5 FLASH (El rápido y nuevo)
+    # Intentar con flash (rápido), si falla ir a pro (robusto)
+    modelos_a_probar = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro-vision']
+    
+    for nombre_modelo in modelos_a_probar:
         try:
-            raw_text = llamar_gemini_seguro('gemini-1.5-flash', prompt, file_bytes)
+            model = genai.GenerativeModel(nombre_modelo)
+            response = model.generate_content([
+                {'mime_type': 'application/pdf', 'data': file_bytes},
+                prompt
+            ])
+            
+            # Limpiar y parsear JSON
+            res_text = response.text.replace("```json", "").replace("```", "").strip()
+            return json.loads(res_text)
         except Exception as e:
-            # Si falla (ej: error 404), intentamos con el modelo PRO (El clásico)
-            print(f"Fallo Flash, intentando Pro: {e}")
-            raw_text = llamar_gemini_seguro('gemini-1.5-pro', prompt, file_bytes)
-        
-        # Limpieza de respuesta
-        json_text = raw_text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(json_text)
-        
-        # Garantizar nombre de archivo
-        data['ARCHIVO'] = filename
-        return data
+            if nombre_modelo == modelos_a_probar[-1]: # Si es el último intento
+                return {"ARCHIVO": filename, "NOMBRE": f"ERROR: {str(e)}", "VALOR_TOTAL_DEUDA": 0}
+            continue # Probar el siguiente modelo
 
-    except Exception as e:
-        return {"ARCHIVO": filename, "NOMBRE": f"ERROR FATAL: {str(e)}", "VALOR_TOTAL_DEUDA": 0}
-
-# --- INTERFAZ ---
-uploaded_files = st.file_uploader("Sube tus Facturas (PDF)", type="pdf", accept_multiple_files=True)
+# --- INTERFAZ STREAMLIT ---
+uploaded_files = st.file_uploader("Arrastra aquí tus facturas PDF", type="pdf", accept_multiple_files=True)
 
 if uploaded_files:
-    if not api_key:
-        st.error("⚠️ ¡Falta la API Key! Pégala en la izquierda.")
-    else:
-        if st.button(f"🚀 Procesar {len(uploaded_files)} Facturas"):
-            results = []
-            bar = st.progress(0)
-            status = st.empty()
+    if st.button(f"🚀 Procesar {len(uploaded_files)} Facturas"):
+        results = []
+        bar = st.progress(0)
+        status = st.empty()
+        
+        for i, f in enumerate(uploaded_files):
+            status.text(f"Analizando: {f.name}...")
             
-            for i, f in enumerate(uploaded_files):
-                status.text(f"Analizando {i+1}/{len(uploaded_files)}: {f.name}")
-                
-                # Procesar
-                data = analizar_con_gemini(f.getvalue(), f.name, api_key)
-                results.append(data)
-                
-                # Pausa anti-bloqueo (4 seg)
-                time.sleep(4)
-                bar.progress((i+1)/len(uploaded_files))
+            # Procesar factura
+            resultado = analizar_factura_ia(f.getvalue(), f.name)
+            results.append(resultado)
             
-            status.success("¡Finalizado!")
+            # Pausa de seguridad para no saturar la API gratuita
+            time.sleep(3)
+            bar.progress((i + 1) / len(uploaded_files))
             
-            df = pd.DataFrame(results)
+        status.success("¡Proceso completado!")
+        
+        df = pd.DataFrame(results)
+        
+        # Reordenar columnas según tu Excel de referencia
+        cols = ['ARCHIVO', 'FECHA_PERIODO', 'FECHA_VENCIMIENTO', 'NUMERO_FACTURA', 
+                'NOMBRE', 'VALOR_FACTURA', 'VALOR_TOTAL_DEUDA', 
+                'ALUMBRADO', 'INTERESES', 'POLIZA', 'MODELO']
+        
+        # Asegurar que todas existan
+        for c in cols:
+            if c not in df.columns: df[c] = None
             
-            # Ordenar columnas
-            cols = ['ARCHIVO', 'FECHA_PERIODO', 'FECHA_VENCIMIENTO', 'NUMERO_FACTURA', 
-                    'NOMBRE', 'VALOR_FACTURA', 'VALOR_TOTAL_DEUDA', 
-                    'ALUMBRADO', 'INTERESES', 'POLIZA', 'MODELO']
+        st.dataframe(df[cols])
+        
+        # Generar Excel para descarga
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df[cols].to_excel(writer, index=False)
             
-            # Rellenar faltantes
-            for c in cols: 
-                if c not in df.columns: df[c] = None
-                
-            st.dataframe(df[cols])
-            
-            # Excel
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                df[cols].to_excel(writer, index=False)
-                
-            st.download_button("Descargar Excel", buffer.getvalue(), "Reporte_IA_Final.xlsx")
+        st.download_button(
+            label="📥 Descargar Reporte Final Excel",
+            data=output.getvalue(),
+            file_name="Reporte_TripleA_IA_Pro.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
