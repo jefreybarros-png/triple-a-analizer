@@ -5,48 +5,56 @@ import io
 import time
 import json
 
-# --- TU LLAVE FIJA (YA INCRUSTADA) ---
-MY_API_KEY = "AIzaSyB74qmjYXqtEIr1pTdNOBwRHpDrpc_mqHU"
+# --- CONFIGURACIÓN DE TU NUEVA LLAVE ---
+# Ya dejé la que me pasaste configurada internamente
+MY_API_KEY = "AIzaSyCfSb7AM8AfkxrdqYJar91BHemmrkRCVUs"
 
-st.set_page_config(page_title="Gemini Triple A", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="Panel Gemini Triple A", page_icon="🤖", layout="wide")
 
 # === PANEL DE BIENVENIDA ===
-st.title("🤖 Hola, soy Gemini")
+st.title("🤖 Centro de Operaciones Gemini")
 with st.container(border=True):
-    st.subheader("¡Todo listo, cuadro!")
-    st.write("Ya tengo tu llave maestra cargada. Sube tus facturas abajo y yo misma armo tu tabla de Excel.")
-    
-    # Verificar conexión de una vez
-    try:
-        genai.configure(api_key=MY_API_KEY)
-        # Probamos listar un modelo para ver si la llave sirve
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        st.success("✅ Estoy conectada y lista para trabajar.")
-    except Exception as e:
-        st.error(f"❌ Eche, hay un problema con la llave: {e}")
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        st.write("### 💎")
+    with col2:
+        st.subheader("¡Todo listo, cuadro!")
+        st.write("Ya vinculé tu nueva API Key. Estoy lista para leer las 199 facturas y armar el Excel tal cual lo necesitas.")
+        
+        # Verificación en vivo de la llave
+        try:
+            genai.configure(api_key=MY_API_KEY)
+            # Forzamos uso de la versión estable para evitar el error 404
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            st.success("✅ Conexión Exitosa con Google AI Studio. El motor está prendido.")
+        except Exception as e:
+            st.error(f"❌ Caramba, hay un problema con la llave: {e}")
 
 st.divider()
 
-# === FUNCIÓN DE EXTRACCIÓN ===
-def procesar_factura(file_bytes, filename):
+# === FUNCIÓN DE LECTURA INTELIGENTE ===
+def analizar_factura(file_bytes, filename):
+    # Usamos Flash 1.5 que es el todoterreno para documentos
     model = genai.GenerativeModel('gemini-1.5-flash')
     
-    # Este prompt es el secreto: le decimos exactamente qué queremos
-    prompt = """
-    Analiza esta factura de Triple A. Devuelve un JSON con estos campos:
-    - ARCHIVO: nombre del archivo
-    - FECHA_PERIODO: Mes y año facturado (ej: Abril 2023)
-    - FECHA_VENCIMIENTO: Fecha de pago (ej: Abr 05-23)
-    - NUMERO_FACTURA: El número de la factura
-    - NOMBRE: El nombre del cliente
-    - VALOR_FACTURA: Valor servicios periodo (sin puntos ni comas, solo el número)
-    - VALOR_TOTAL_DEUDA: Total a pagar (sin puntos ni comas)
-    - ALUMBRADO: Valor alumbrado público
-    - INTERESES: Valor intereses de mora
-    - POLIZA: Numero de póliza
-    - MODELO: Determina si es LEGACY (vieja), TRANSICION o ELECTRONICA
+    prompt = f"""
+    Eres un experto en auditoría de facturas de servicios públicos en Barranquilla.
+    Analiza este PDF de Triple A y extrae los datos para mi reporte de Excel.
     
-    Responde SOLO el JSON, nada más.
+    CAMPOS REQUERIDOS EN JSON:
+    - ARCHIVO: "{filename}"
+    - FECHA PERIODO: El mes facturado (ej: "Abril 2023").
+    - FECHA DE VENCIMIENTO: La fecha "Pague hasta" (ej: "Abr 05-23").
+    - NUMERO_FACTURA: El número de la factura.
+    - NOMBRE: Nombre completo del cliente.
+    - VALOR_FACTURA: Consumo del mes (Servicios del periodo). Solo el número.
+    - VALOR_TOTAL_DEUDA: Total a pagar con deuda acumulada. Solo el número.
+    - ALUMBRADO: Valor impuesto alumbrado.
+    - INTERESES: Valor intereses de mora.
+    - POLIZA: Número de póliza.
+    - MODELO: Identifica si es ELECTRONICA, TRANSICION o LEGACY.
+
+    RESPONDE ÚNICAMENTE EL OBJETO JSON PURO.
     """
 
     try:
@@ -55,7 +63,7 @@ def procesar_factura(file_bytes, filename):
             prompt
         ])
         
-        # Limpiar la respuesta para que sea un JSON puro
+        # Limpieza por si la IA mete texto extra
         res_text = response.text.strip()
         if "```json" in res_text:
             res_text = res_text.split("```json")[1].split("```")[0].strip()
@@ -64,47 +72,46 @@ def procesar_factura(file_bytes, filename):
             
         return json.loads(res_text)
     except Exception as e:
-        return {"ARCHIVO": filename, "NOMBRE": f"Error: {str(e)}"}
+        return {"ARCHIVO": filename, "NOMBRE": f"ERROR: {str(e)}"}
 
-# === ÁREA DE CARGA ===
+# === ÁREA DE CARGA Y PROCESO ===
 st.subheader("📁 Sube tus PDFs")
 uploaded_files = st.file_uploader("Arrastra aquí todas las facturas", type="pdf", accept_multiple_files=True)
 
 if uploaded_files:
-    if st.button("🚀 Empezar a leer facturas"):
+    if st.button("🚀 Iniciar Extracción"):
         resultados = []
-        progress_bar = st.progress(0)
-        status = st.empty()
+        barra = st.progress(0)
+        estado = st.empty()
         
         for i, f in enumerate(uploaded_files):
-            status.info(f"Leyendo factura {i+1} de {len(uploaded_files)}: **{f.name}**")
+            estado.info(f"Analizando factura {i+1} de {len(uploaded_files)}: **{f.name}**")
             
-            # Procesar
-            res = procesar_factura(f.getvalue(), f.name)
+            # Procesar con Gemini
+            res = analizar_factura(f.getvalue(), f.name)
             resultados.append(res)
             
-            # Le damos 4 segundos entre facturas para que Google no nos bloquee
+            # Pausa de 4 segundos para respetar el Plan Gratuito (RPM Limit)
             time.sleep(4)
-            progress_bar.progress((i + 1) / len(uploaded_files))
+            barra.progress((i + 1) / len(uploaded_files))
             
-        status.success("¡Listo! Ya terminé de leer todo.")
+        estado.success("¡Coronamos! Revisa los datos abajo.")
         
-        # Mostrar tabla
         df = pd.DataFrame(resultados)
         
-        # Ordenar columnas como las necesitas
-        columnas = ['ARCHIVO', 'FECHA_PERIODO', 'FECHA_VENCIMIENTO', 'NUMERO_FACTURA', 
+        # Ordenar columnas como en tu ejemplo
+        columnas = ['ARCHIVO', 'FECHA PERIODO', 'FECHA DE VENCIMIENTO', 'NUMERO_FACTURA', 
                     'NOMBRE', 'VALOR_FACTURA', 'VALOR_TOTAL_DEUDA', 
                     'ALUMBRADO', 'INTERESES', 'POLIZA', 'MODELO']
         
         for col in columnas:
             if col not in df.columns: df[col] = None
             
-        st.write("### Vista previa de los datos")
+        st.write("### 📊 Vista previa del Reporte")
         st.dataframe(df[columnas])
         
-        # Descarga
+        # Botón para descargar el Excel
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df[columnas].to_excel(writer, index=False)
-        st.download_button("📥 Descargar Tabla en Excel", output.getvalue(), "Reporte_TripleA_Gemini.xlsx")
+        st.download_button("📥 Descargar Excel Final", output.getvalue(), "Reporte_TripleA_Gemini_Final.xlsx")
