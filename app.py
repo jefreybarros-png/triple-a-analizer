@@ -4,229 +4,235 @@ import re
 import pandas as pd
 import io
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Analizador Triple A - Nivel Pro", page_icon="💧", layout="wide")
+st.set_page_config(page_title="Analizador Triple A - Estructural", page_icon="🏗️", layout="wide")
 
-st.title("💧 Analizador de Facturas Triple A - Edición 'Bien Fina'")
-st.markdown("Extracción de precisión quirúrgica para todos los formatos (2001-2025).")
+st.title("🏗️ Analizador Estructural Triple A - Detección Precisa")
+st.markdown("Identifica la 'firma' del documento y extrae datos leyendo línea por línea.")
 
-class TripleA_Sniper:
-    def __init__(self):
-        # Mapeo de meses para normalizar fechas
-        self.meses = {
-            'ENE': '01', 'FEB': '02', 'MAR': '03', 'ABR': '04', 'MAY': '05', 'JUN': '06',
-            'JUL': '07', 'AGO': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DIC': '12',
-            'ENERO': '01', 'FEBRERO': '02', 'MARZO': '03', 'ABRIL': '04', 'MAYO': '05', 'JUNIO': '06',
-            'JULIO': '07', 'AGOSTO': '08', 'SEPTIEMBRE': '09', 'OCTUBRE': '10', 'NOVIEMBRE': '11', 'DICIEMBRE': '12'
-        }
+# --- UTILIDADES ---
+def clean_money(text):
+    """Limpia una cadena para encontrar dinero, manejando basura de OCR."""
+    if not text: return 0.0
+    # Limpieza agresiva de OCR (letras por numeros)
+    text = str(text).upper().replace('S', '5').replace('O', '0').replace('B', '8')
+    # Buscar el patrón de dinero más claro en la cadena
+    # Acepta: 1.000,00 | 1000,00 | 1.000 | 1,000
+    matches = re.findall(r'[\d\.,]+', text)
+    if not matches: return 0.0
+    
+    # Tomamos el match más largo (usualmente el precio real y no un '1' perdido)
+    best_match = max(matches, key=len)
+    
+    # Normalización Colombia
+    clean = best_match
+    if ',' in clean and '.' in clean:
+        clean = clean.replace('.', '').replace(',', '.')
+    elif ',' in clean:
+        if len(clean.split(',')[-1]) == 3: clean = clean.replace(',', '')
+        else: clean = clean.replace(',', '.')
+    elif '.' in clean:
+         if len(clean.split('.')[-1]) == 3: clean = clean.replace('.', '')
+    
+    try: return float(clean)
+    except: return 0.0
 
-    def clean_money(self, val):
-        """Limpia formatos de moneda colombianos (viejos y nuevos)."""
-        if not val: return 0.0
-        # Corrección de OCR común en escaneos viejos
-        val = str(val).upper().replace('S', '5').replace('O', '0').replace('B', '8')
-        # Dejar solo números, puntos y comas
-        clean = re.sub(r'[^\d,\.]', '', val)
+def parse_date(text):
+    """Busca fechas en formatos variados."""
+    try:
+        # 24-Abr-2023 o 24/04/2023
+        match = re.search(r'(\d{1,2})[-/\s]+([A-Za-z]{3,}|\d{2})[-/\s]+(\d{2,4})', text)
+        if match:
+            return f"{match.group(3)}-{match.group(2)}-{match.group(1)}"
+        # ABR-2001 (Viejas)
+        match = re.search(r'([A-Z]{3})[-/\s]+(\d{4})', text)
+        if match:
+            return f"{match.group(2)}-{match.group(1)}-01"
+    except: pass
+    return None
+
+# --- DRIVERS POR MODELO ---
+
+class Model_Driver:
+    def extract(self, lines, text_block):
+        return {}
+
+class Driver_Electronica_2024(Model_Driver):
+    """Para facturas con CUFE y código QR azul."""
+    def extract(self, lines, text_block):
+        data = {"MODELO": "ELECTRÓNICA (2024-25)"}
+        for i, line in enumerate(lines):
+            # En la electrónica, el total a pagar deuda está explícito
+            if "TOTAL FACTURA A PAGAR" in line.upper():
+                data['VALOR_TOTAL_DEUDA'] = clean_money(line.split('$')[-1])
+            
+            # El consumo del mes
+            if "TOTAL FACTURA SERVICIOS DEL PERIODO" in line.upper():
+                data['VALOR_CONSUMO_MES'] = clean_money(line.split('$')[-1])
+            
+            # Fecha y Factura
+            if "FECHA DE EMISIÓN" in line.upper():
+                data['FECHA'] = parse_date(line)
+            if "FACTURA ELECTRÓNICA DE VENTA" in line.upper():
+                # A veces el número está en la misma línea, a veces abajo
+                parts = line.split(':')
+                if len(parts) > 1: data['NUMERO_FACTURA'] = parts[1].strip()
         
-        # Lógica de decisión decimal/miles
-        if ',' in clean and '.' in clean: # Caso: 1.500,00
-            clean = clean.replace('.', '').replace(',', '.')
-        elif ',' in clean: 
-            # Si hay 3 dígitos al final (100,000) es miles
-            if len(clean.split(',')[-1]) == 3: clean = clean.replace(',', '')
-            else: clean = clean.replace(',', '.') # Es decimal
-        elif '.' in clean:
-             # Si hay 3 dígitos al final (100.000) es miles
-             if len(clean.split('.')[-1]) == 3: clean = clean.replace('.', '')
-             
-        try: return float(clean)
-        except: return 0.0
-
-    def parse_date(self, text):
-        """Normaliza fechas variadas a YYYY-MM-DD."""
-        try:
-            # Patrón 1: Ene 24-23 o Ene 24/23
-            match = re.search(r'([A-Z]{3,})\s*(\d{1,2})[-/](\d{2,4})', text, re.IGNORECASE)
-            if match:
-                mes = self.meses.get(match.group(1).upper()[:3], '01')
-                dia = match.group(2).zfill(2)
-                ano = match.group(3)
-                if len(ano) == 2: ano = f"20{ano}"
-                return f"{ano}-{mes}-{dia}"
-            
-            # Patrón 2: 24/04/2023
-            match = re.search(r'(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})', text)
-            if match:
-                return f"{match.group(3)}-{match.group(2).zfill(2)}-{match.group(1).zfill(2)}"
-            
-            # Patrón 3 (Viejas): OCT-2001
-            match = re.search(r'([A-Z]{3,})[-/\s](\d{4})', text, re.IGNORECASE)
-            if match:
-                mes = self.meses.get(match.group(1).upper()[:3], '01')
-                return f"{match.group(2)}-{mes}-01"
-                
-            return None
-        except: return None
-
-    def extract_value_context(self, text, keywords):
-        """Busca una palabra clave y extrae el dinero que esté CERCA (arriba, abajo o al lado)."""
-        # Buscamos la palabra clave
-        match = re.search(rf"({keywords})", text, re.IGNORECASE)
-        if not match: return 0.0
-        
-        # Tomamos un "recorte" del texto alrededor de la palabra encontrada
-        start = match.start()
-        # Miramos 100 caracteres adelante
-        snippet = text[start:start+150]
-        
-        # Buscamos patrones de dinero en ese recorte
-        # El regex busca: $ opcional, digitos, puntos/comas, digitos
-        money_match = re.search(r'\$\s?([\d\.,]+)', snippet)
-        if money_match:
-            return self.clean_money(money_match.group(1))
-        
-        # Si no tiene signo peso, buscamos número "suelto" grande
-        nums = re.findall(r'([\d\.,]{4,})', snippet) # Al menos 4 dígitos para evitar fechas o códigos cortos
-        if nums:
-            return self.clean_money(nums[0])
-            
-        return 0.0
-
-    def get_line_value(self, text, keyword):
-        """Busca una línea específica (ej: Alumbrado) y saca el valor final."""
-        lines = text.split('\n')
-        for line in lines:
-            if keyword.upper() in line.upper():
-                # Extraer todos los valores numéricos de la línea
-                vals = re.findall(r'([\d\.,]+)', line)
-                # Filtramos valores muy pequeños (a veces agarran el porcentaje 1.5%)
-                valid_vals = [v for v in vals if self.clean_money(v) > 50]
-                if valid_vals:
-                    # Usualmente el valor a pagar es el último de la línea
-                    return self.clean_money(valid_vals[-1])
-        return 0.0
-
-    def analyze_pdf(self, file_obj, filename):
-        try:
-            text = ""
-            with pdfplumber.open(file_obj) as pdf:
-                for page in pdf.pages:
-                    # layout=True es CLAVE para mantener tablas alineadas
-                    text += (page.extract_text(layout=True) or "") + "\n"
-        except Exception as e:
-            return {"ARCHIVO": filename, "ERROR": str(e)}
-
-        data = {
-            "ARCHIVO": filename, 
-            "POLIZA": None, 
-            "NUMERO_FACTURA": None, 
-            "FECHA": None,
-            "VALOR_MES": 0.0, 
-            "VALOR_TOTAL_DEUDA": 0.0,
-            "VALOR_ALUMBRADO": 0.0, 
-            "VALOR_INTERES": 0.0,
-            "TIPO_DETECTADO": "Desconocido"
-        }
-
-        # 1. PÓLIZA (Casi siempre es estándar)
-        poliza = re.search(r'PÓLIZA[:\s]*(\d+)', text, re.IGNORECASE)
-        if poliza: data['POLIZA'] = poliza.group(1)
-
-        # 2. IDENTIFICAR FORMATO Y EXTRAER VALORES
-        upper_text = text.upper()
-        
-        if "ESTADO DE CUENTA" in upper_text:
-            data['TIPO_DETECTADO'] = "ESTADO DE CUENTA"
-            data['NUMERO_FACTURA'] = "RESUMEN"
-            data['VALOR_TOTAL_DEUDA'] = self.extract_value_context(text, "TOTAL")
-            data['FECHA'] = self.parse_date(text) # Intenta buscar cualquier fecha
-
-        elif "FACTURA ELECTRÓNICA" in upper_text or "CUFE:" in upper_text:
-            data['TIPO_DETECTADO'] = "ELECTRÓNICA (2024-25)"
-            
-            # Factura
-            fac = re.search(r'(?:Factura electrónica de venta|No\.|Número)[:\s]*([A-Z0-9]+)', text, re.IGNORECASE)
-            if fac: data['NUMERO_FACTURA'] = fac.group(1)
-            
-            # Fecha
-            fecha_match = re.search(r'Fecha de emisión[:\s]*([A-Za-z0-9\s-]+)', text, re.IGNORECASE)
-            if fecha_match: data['FECHA'] = self.parse_date(fecha_match.group(1))
-
-            # Valores (Aquí la precisión es clave)
-            # Consumo Mes: Busca explícitamente "Servicios del Periodo"
-            data['VALOR_MES'] = self.extract_value_context(text, "TOTAL FACTURA SERVICIOS DEL PERIODO")
-            # Deuda Total: Busca "Total a Pagar"
-            data['VALOR_TOTAL_DEUDA'] = self.extract_value_context(text, "TOTAL FACTURA A PAGAR")
-
-        elif "TOTAL FACTURA SERVICIOS DEL PERIODO" in upper_text:
-            data['TIPO_DETECTADO'] = "TRANSICIÓN (2023)"
-            # Mismo patrón que la electrónica
-            fac = re.search(r'Factura de servicio No\.[:\s]*(\d+)', text, re.IGNORECASE)
-            if fac: data['NUMERO_FACTURA'] = fac.group(1)
-            
-            data['VALOR_MES'] = self.extract_value_context(text, "TOTAL FACTURA SERVICIOS DEL PERIODO")
-            data['VALOR_TOTAL_DEUDA'] = self.extract_value_context(text, "Total a Pagar")
-            # Fecha (A veces está arriba a la derecha)
-            fecha_match = re.search(r'Fecha de emisión[:\s]*([A-Za-z0-9\s-]+)', text, re.IGNORECASE)
-            if fecha_match: data['FECHA'] = self.parse_date(fecha_match.group(1))
-
-        else: # FORMATO LEGACY (2017-2020) y VIEJOS
-            data['TIPO_DETECTADO'] = "LEGACY / VIEJO"
-            
-            # Factura
-            fac = re.search(r'(?:Factura|Ref)[:\s\.]*(?:No\.?)?[:\s]*(\d+)', text, re.IGNORECASE)
-            if fac: data['NUMERO_FACTURA'] = fac.group(1)
-            
-            # Valores (En legacy solo hay un Total relevante)
-            val = self.extract_value_context(text, "Total a Pagar")
-            if val == 0: val = self.extract_value_context(text, "VALOR A PAGAR") # Para 2001
-            
-            data['VALOR_MES'] = val
-            data['VALOR_TOTAL_DEUDA'] = val # Asumimos igual
-            
-            # Fecha (Buscar patrones MMM-AAAA o DD/MM/AAAA)
-            data['FECHA'] = self.parse_date(text)
-
-        # 3. EXTRACCION ESPECÍFICA (Línea por línea)
-        data['VALOR_ALUMBRADO'] = self.get_line_value(text, "Alumbrado Público")
-        data['VALOR_INTERES'] = self.get_line_value(text, "Intereses de Mora")
-        
-        # Limpieza final: Si el Alumbrado es igual al total (error raro), poner 0
-        if data['VALOR_ALUMBRADO'] == data['VALOR_TOTAL_DEUDA']: data['VALOR_ALUMBRADO'] = 0
+        # Búsqueda de respaldo si falló la línea por línea
+        if 'VALOR_TOTAL_DEUDA' not in data:
+             m = re.search(r'TOTAL FACTURA A PAGAR\s*\$?([\d\.,]+)', text_block)
+             if m: data['VALOR_TOTAL_DEUDA'] = clean_money(m.group(1))
 
         return data
 
+class Driver_Legacy_2017_2020(Model_Driver):
+    """Para facturas viejas blanco y negro con código de barras lineal."""
+    def extract(self, lines, text_block):
+        data = {"MODELO": "LEGACY (2017-2020)"}
+        
+        # En estas facturas, el "Total a Pagar" a veces tiene puntos suspensivos
+        # Ejemplo: "Total a Pagar ........................ $ 450.000"
+        
+        for line in lines:
+            line_upper = line.upper()
+            
+            # Valor (El más crítico)
+            if "TOTAL A PAGAR" in line_upper and "PERIODO" not in line_upper:
+                # Estrategia: Partir por espacios y tomar el último elemento que parezca dinero
+                parts = line.split()
+                # Buscamos desde el final hacia atrás
+                for part in reversed(parts):
+                    val = clean_money(part)
+                    if val > 100: # Filtro de ruido (evitar que tome un '1')
+                        data['VALOR_TOTAL_DEUDA'] = val
+                        data['VALOR_CONSUMO_MES'] = val
+                        break
+            
+            # Factura
+            if "FACTURA DE SERVICIOS NO" in line_upper or "FACTURA DE SERVICIO NO" in line_upper:
+                # Extraer solo dígitos de la línea
+                nums = re.findall(r'\d+', line)
+                if nums: data['NUMERO_FACTURA'] = nums[-1] # El último número suele ser la factura
+                
+            # Fecha
+            if "FECHA DE EMISIÓN" in line_upper:
+                data['FECHA'] = parse_date(line)
+
+        # Fallback para fecha: buscar patrón MMM-YY si no se encontró arriba
+        if 'FECHA' not in data:
+            m = re.search(r'([A-Z][a-z]{2}\s\d{2}-\d{2})', text_block) # Ej: Mar 20-17
+            if m: data['FECHA'] = m.group(1)
+
+        return data
+
+class Driver_Retro_2001(Model_Driver):
+    """Para escaneos muy viejos."""
+    def extract(self, lines, text_block):
+        data = {"MODELO": "RETRO (2000s)"}
+        # Aquí el OCR es sucio, confiamos más en regex sobre el bloque entero
+        
+        # Fecha tipo OCT-2001
+        m_fecha = re.search(r'([A-Z]{3}[-/\s]\d{4})', text_block)
+        if m_fecha: data['FECHA'] = m_fecha.group(1)
+        
+        # Valor
+        # Buscamos patrones de dinero grandes
+        precios = re.findall(r'\$\s?([\d\.,]{4,})', text_block)
+        if precios:
+            # En facturas viejas, el total solía ser el número más grande al final
+            vals = [clean_money(p) for p in precios]
+            data['VALOR_TOTAL_DEUDA'] = max(vals) if vals else 0
+            data['VALOR_CONSUMO_MES'] = data['VALOR_TOTAL_DEUDA']
+            
+        return data
+
+class Driver_Estado_Cuenta(Model_Driver):
+    def extract(self, lines, text_block):
+        data = {"MODELO": "ESTADO DE CUENTA", "NUMERO_FACTURA": "RESUMEN"}
+        # El total suele estar al final de la tabla
+        for line in reversed(lines): # Leemos de abajo hacia arriba
+            if "TOTAL" in line.upper():
+                val = clean_money(line)
+                if val > 0:
+                    data['VALOR_TOTAL_DEUDA'] = val
+                    break
+        return data
+
+# --- CEREBRO PRINCIPAL ---
+def analyze_invoice(file_obj, filename):
+    try:
+        text_block = ""
+        lines = []
+        with pdfplumber.open(file_obj) as pdf:
+            for page in pdf.pages:
+                # Extraer texto preservando lineas
+                page_text = page.extract_text()
+                if page_text:
+                    text_block += page_text + "\n"
+                    lines.extend(page_text.split('\n'))
+    except Exception as e:
+        return {"ARCHIVO": filename, "ERROR": str(e)}
+
+    # 1. DETECTAR EL DRIVER ADECUADO (La "Firma")
+    driver = None
+    upper_block = text_block.upper()
+
+    if "ESTADO DE CUENTA" in upper_block:
+        driver = Driver_Estado_Cuenta()
+    elif "CUFE:" in upper_block or "FACTURA ELECTRÓNICA" in upper_block:
+        driver = Driver_Electronica_2024()
+    elif "TRIPLEAPP" in upper_block or "SERVICIOS DEL PERIODO" in upper_block:
+        driver = Driver_Electronica_2024() # Estructura similar a la moderna (2023)
+    elif re.search(r'[A-Z]{3}-\d{4}', upper_block): # Detecta FEB-2002
+        driver = Driver_Retro_2001()
+    else:
+        # Por defecto asumimos Legacy (2017-2020) si no es nada de lo anterior
+        driver = Driver_Legacy_2017_2020()
+
+    # 2. EJECUTAR EXTRACCIÓN
+    data = driver.extract(lines, text_block)
+    
+    # 3. DATOS COMUNES (Póliza suele estar igual en todas)
+    poliza_m = re.search(r'PÓLIZA[:\s]*(\d+)', text_block, re.IGNORECASE)
+    data['POLIZA'] = poliza_m.group(1) if poliza_m else None
+    
+    data['ARCHIVO'] = filename
+    
+    # Rellenar ceros si falta algo
+    if 'VALOR_TOTAL_DEUDA' not in data: data['VALOR_TOTAL_DEUDA'] = 0.0
+    if 'VALOR_CONSUMO_MES' not in data: data['VALOR_CONSUMO_MES'] = 0.0
+    
+    # Buscar Alumbrado e Intereses (Global)
+    alum = re.search(r'Impuesto Alumbrado Público BQ.*?\$?([\d\.,]+)', text_block)
+    data['ALUMBRADO'] = clean_money(alum.group(1)) if alum else 0.0
+    
+    ints = re.search(r'Intereses de Mora.*?\$?([\d\.,]+)', text_block)
+    data['INTERESES'] = clean_money(ints.group(1)) if ints else 0.0
+
+    return data
+
 # --- INTERFAZ ---
-uploaded_files = st.file_uploader("Arrastra aquí tus facturas PDF", type="pdf", accept_multiple_files=True)
+uploaded_files = st.file_uploader("Sube tus PDFs", type="pdf", accept_multiple_files=True)
 
 if uploaded_files:
-    if st.button(f"🔎 Analizar {len(uploaded_files)} Archivos"):
-        sniper = TripleA_Sniper()
+    if st.button("Analizar Estructura"):
         results = []
         bar = st.progress(0)
-        
-        for i, file in enumerate(uploaded_files):
-            res = sniper.analyze_pdf(file, file.name)
+        for i, f in enumerate(uploaded_files):
+            res = analyze_invoice(f, f.name)
             results.append(res)
             bar.progress((i+1)/len(uploaded_files))
             
         df = pd.DataFrame(results)
         
-        # Ordenar columnas lógicamente
-        cols = ['ARCHIVO', 'TIPO_DETECTADO', 'FECHA', 'NUMERO_FACTURA', 
-                'VALOR_MES', 'VALOR_ALUMBRADO', 'VALOR_INTERES', 'VALOR_TOTAL_DEUDA', 'POLIZA']
-        
-        # Rellenar columnas faltantes
+        # Ordenar
+        cols = ['ARCHIVO', 'MODELO', 'FECHA', 'NUMERO_FACTURA', 'VALOR_CONSUMO_MES', 'VALOR_TOTAL_DEUDA', 'ALUMBRADO', 'INTERESES', 'POLIZA']
         for c in cols: 
             if c not in df.columns: df[c] = None
         df = df[cols]
-
-        st.success("¡Análisis Terminado!")
+        
         st.dataframe(df)
         
-        # Exportar
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df.to_excel(writer, index=False)
-        
-        st.download_button("📥 Descargar Excel", output.getvalue(), "Reporte_TripleA_Fino.xlsx")
+        st.download_button("Descargar Excel", output.getvalue(), "Reporte_Estructural.xlsx")
